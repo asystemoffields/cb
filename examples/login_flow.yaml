@@ -1,0 +1,19 @@
+# Sample batch script: log in to a site, then snap the dashboard.
+# Run with:  cb batch examples/login_flow.yaml
+#
+# Each item is a single-key map: {command: args}.
+# - args may be a string (will be shlex-split), a list, or a dict (passed as inline JSON).
+# - For commands that need a single argument with spaces, quote it:  "click: \"text=Sign In\""
+
+- goto: https://example.com/login
+- wait_idle: 8000
+
+# Smart bulk fill — labels are matched against form controls.
+- fill_form:
+    Email: alex@example.com
+    Password: hunter2
+    Remember me: true
+
+- act: "click Sign in"
+- wait_url: dashboard
+- snap: []

@@ -1,0 +1,6 @@
+[
+  { "goto": "https://example.com" },
+  { "wait_idle": 5000 },
+  { "snap": [] },
+  { "links": [] }
+]
