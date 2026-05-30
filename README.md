@@ -1,7 +1,7 @@
 # cb — Claude Browser
 
 A Playwright-over-CDP harness designed for **Claude Code** to drive **any
-Chromium-based browser** (Brave, Chrome, Edge) on Windows. Optimized for the
+Chromium-based browser** (Brave, Chrome, Edge) on **Windows, macOS, and Linux**. Optimized for the
 way an LLM operator works: snap a page → reference elements by number → act,
 with smart fallbacks for selectors and a single-CDP-session batch mode for
 multi-step flows.
@@ -24,9 +24,36 @@ LLM operators struggle with browsers because:
 
 ## Setup
 
-Already installed on this machine: Playwright 1.58, Pillow 12, PyYAML 6.
+Dependencies: `playwright`, `Pillow`, `PyYAML` (Python 3.10+). Connecting over
+CDP does **not** require Playwright's bundled browsers, so `playwright install`
+is unnecessary — you just need the `playwright` pip package and a real
+Brave/Chrome/Edge install.
 
-To use:
+### Linux / macOS
+
+```bash
+# One-time: create an isolated venv for the harness and install deps.
+# (On Debian/Ubuntu you may first need: sudo apt install python3-venv)
+cd /path/to/cb
+python3 -m venv .venv
+./.venv/bin/pip install playwright Pillow PyYAML
+
+# Then use the bash wrapper (auto-uses .venv if present). Put cb on PATH or
+# call it by full path:
+./cb launch                          # auto-detect Brave > Chrome > Edge
+./cb launch chrome                   # force Chrome
+CB_BROWSER=edge ./cb launch          # via env var
+CB_BROWSER_PATH=/opt/something/chromium ./cb launch
+```
+
+Browser binaries are resolved against `$PATH` (e.g. `brave-browser`,
+`google-chrome`, `chromium`) — or set `CB_BROWSER_PATH` to an absolute path.
+Killing uses `pkill -x` on the exact process name.
+
+### Windows
+
+Already installed on this machine: Playwright 1.58, Pillow 12, PyYAML 6. Use the
+`cb.bat` / `cb.ps1` wrapper:
 
 ```powershell
 # From any directory, after putting the cb folder on PATH (or use full path):
@@ -54,7 +81,7 @@ logged into Gmail / GitHub / whatever. The harness rides along.
 | `CB_BROWSER_PATH` | (auto) | Full path to a Chromium-based exe |
 | `CB_USER_DATA_DIR` | (browser default) | Custom profile dir |
 | `CB_TIMEOUT_MS` | `8000` | Default per-action timeout |
-| `CB_SHOT_DIR` | `~/documents` | Where snap/screenshot files go |
+| `CB_SHOT_DIR` | `~` (home) | Where snap/screenshot files go |
 | `CB_STATE_DIR` | `~/.cb` | Where state.json lives |
 
 ## The killer feature: snap → ref

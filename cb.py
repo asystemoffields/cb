@@ -100,39 +100,75 @@ from playwright.async_api import (
 
 # ─── Config ──────────────────────────────────────────────────────────────────
 
+IS_WINDOWS = sys.platform.startswith("win")
+IS_MAC = sys.platform == "darwin"
+
 CDP_PORT = int(os.environ.get("CB_CDP_PORT", "9333"))
-SCREENSHOT_DIR = Path(os.environ.get("CB_SHOT_DIR", os.path.expanduser(r"~\documents")))
-STATE_DIR = Path(os.environ.get("CB_STATE_DIR", os.path.expanduser(r"~\.cb")))
+SCREENSHOT_DIR = Path(os.environ.get("CB_SHOT_DIR", os.path.expanduser("~")))
+STATE_DIR = Path(os.environ.get("CB_STATE_DIR", os.path.expanduser("~/.cb")))
 STATE_DIR.mkdir(parents=True, exist_ok=True)
 STATE_FILE = STATE_DIR / "state.json"
 ACTIVE_FRAME_FILE = STATE_DIR / "active_frame.json"
 
 DEFAULT_TIMEOUT_MS = int(os.environ.get("CB_TIMEOUT_MS", "8000"))
 
-BROWSER_PATHS = {
-    "brave": [
-        r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe",
-        r"C:\Program Files (x86)\BraveSoftware\Brave-Browser\Application\brave.exe",
-    ],
-    "chrome": [
-        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
-    ],
-    "edge": [
-        r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
-        r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
-    ],
-}
+# Candidate browser locations per OS. Windows/macOS entries are absolute paths;
+# Linux entries are mostly bare command names resolved against $PATH (see
+# _resolve_browser_candidate). Set CB_BROWSER_PATH to override entirely.
+if IS_WINDOWS:
+    BROWSER_PATHS = {
+        "brave": [
+            r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe",
+            r"C:\Program Files (x86)\BraveSoftware\Brave-Browser\Application\brave.exe",
+        ],
+        "chrome": [
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+        ],
+        "edge": [
+            r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+            r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+        ],
+    }
+elif IS_MAC:
+    BROWSER_PATHS = {
+        "brave": ["/Applications/Brave Browser.app/Contents/MacOS/Brave Browser"],
+        "chrome": ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"],
+        "edge": ["/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"],
+    }
+else:  # Linux / other POSIX
+    BROWSER_PATHS = {
+        "brave": ["brave-browser", "brave", "/opt/brave.com/brave/brave"],
+        "chrome": ["google-chrome", "google-chrome-stable", "chromium", "chromium-browser"],
+        "edge": ["microsoft-edge", "microsoft-edge-stable"],
+    }
+
+# Pattern used to kill a running browser. On Windows it's a Stop-Process -Name
+# (no .exe); on POSIX it's a `pkill -f <pattern>` substring against the cmdline.
 PROCESS_NAMES = {"brave": "brave", "chrome": "chrome", "edge": "msedge"}
+
+
+def _resolve_browser_candidate(path: str) -> str | None:
+    """Resolve a candidate to an absolute executable, or None.
+
+    Absolute/relative paths (containing a path separator) are checked for
+    existence; bare command names are looked up on $PATH via shutil.which."""
+    if (os.sep in path) or ("/" in path):
+        return path if Path(path).exists() else None
+    return shutil.which(path)
 
 
 def find_browser(preferred: str | None = None) -> tuple[str, str]:
     """Return (kind, path). Honors CB_BROWSER_PATH and CB_BROWSER env vars."""
     env_path = os.environ.get("CB_BROWSER_PATH")
-    if env_path and Path(env_path).exists():
-        name = Path(env_path).stem.lower()
-        kind = "edge" if "edge" in name else "chrome" if "chrome" in name else "brave" if "brave" in name else "chrome"
-        return kind, env_path
+    if env_path:
+        resolved = env_path if Path(env_path).exists() else shutil.which(env_path)
+        if resolved:
+            name = Path(resolved).stem.lower()
+            kind = ("edge" if "edge" in name
+                    else "chrome" if ("chrome" in name or "chromium" in name)
+                    else "brave" if "brave" in name else "chrome")
+            return kind, resolved
     pref = preferred or os.environ.get("CB_BROWSER")
     order = [pref] if pref else []
     for kind in ("brave", "chrome", "edge"):
@@ -142,9 +178,49 @@ def find_browser(preferred: str | None = None) -> tuple[str, str]:
         if not kind:
             continue
         for path in BROWSER_PATHS.get(kind, []):
-            if Path(path).exists():
-                return kind, path
+            resolved = _resolve_browser_candidate(path)
+            if resolved:
+                return kind, resolved
     raise CBError("No supported browser found. Set CB_BROWSER_PATH or install Brave/Chrome/Edge.")
+
+
+# POSIX process-name variants per browser. Names are matched with `pkill -x`
+# against the kernel `comm` (truncated to 15 chars), so e.g. the launcher
+# wrapper `brave-browser` and the real `brave` binary are both covered.
+_POSIX_PROC_ALIASES = {
+    "brave": ["brave", "brave-browser"],
+    "chrome": ["chrome", "google-chrome", "chromium", "chromium-browse"],
+    "msedge": ["msedge", "microsoft-edge"],
+}
+
+
+def _kill_browser(proc_name: str) -> None:
+    """Force-kill all processes for a browser, cross-platform."""
+    if IS_WINDOWS:
+        subprocess.run(
+            ["powershell.exe", "-NoProfile", "-Command",
+             f"Stop-Process -Name {proc_name} -Force -ErrorAction SilentlyContinue"],
+            check=False, capture_output=True,
+        )
+        return
+    # POSIX: match exact process names (the executable basename). `-x` avoids
+    # `-f`'s pitfall of matching any command line that merely *contains* the
+    # word — including cb's own `cb kill brave` process, which would make cb
+    # signal itself. Killing the main process tears down its renderer children.
+    names = _POSIX_PROC_ALIASES.get(proc_name, [proc_name])
+
+    def _alive() -> bool:
+        return any(subprocess.run(["pgrep", "-x", n], capture_output=True).returncode == 0
+                   for n in names)
+
+    for n in names:                       # graceful first
+        subprocess.run(["pkill", "-x", n], check=False, capture_output=True)
+    for _ in range(20):                   # wait up to ~2s for clean exit
+        if not _alive():
+            return
+        time.sleep(0.1)
+    for n in names:                       # force anything that lingers
+        subprocess.run(["pkill", "-9", "-x", n], check=False, capture_output=True)
 
 
 # ─── State ───────────────────────────────────────────────────────────────────
@@ -241,6 +317,12 @@ async def get_active_page(browser: Browser) -> Page:
 
     if not candidates:
         return await contexts[0].new_page()
+    # Honor CB_TAB_URL env override (substring match against page.url)
+    target = os.environ.get("CB_TAB_URL", "").strip()
+    if target:
+        for p in candidates:
+            if target in (p.url or ""):
+                return p
     # Prefer non-blank pages
     non_blank = [p for p in candidates if not (p.url == "about:blank" or p.url == "")]
     return (non_blank or candidates)[-1]
@@ -404,28 +486,25 @@ async def cmd_launch(args: list[str], opts: dict) -> None:
     except CBError:
         pass
 
-    # Kill any existing browser of this kind (otherwise CDP flag is ignored)
-    try:
-        subprocess.run(
-            ["powershell.exe", "-NoProfile", "-Command",
-             f"Stop-Process -Name {proc_name} -Force -ErrorAction SilentlyContinue"],
-            check=False,
-            capture_output=True,
-        )
-    except Exception:
-        pass
+    # Kill any existing browser of this kind (otherwise the CDP flag is ignored)
+    _kill_browser(proc_name)
 
     await asyncio.sleep(1.5)
 
-    # Launch detached
+    # Launch detached so the browser outlives this cb process
     user_data = os.environ.get("CB_USER_DATA_DIR")
     cmd = [path, f"--remote-debugging-port={CDP_PORT}"]
     if user_data:
         cmd.append(f"--user-data-dir={user_data}")
-    DETACHED_PROCESS = 0x00000008
-    CREATE_NEW_PROCESS_GROUP = 0x00000200
-    flags = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
-    subprocess.Popen(cmd, creationflags=flags, close_fds=True)
+    if IS_WINDOWS:
+        DETACHED_PROCESS = 0x00000008
+        CREATE_NEW_PROCESS_GROUP = 0x00000200
+        subprocess.Popen(cmd, creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP,
+                         close_fds=True)
+    else:
+        subprocess.Popen(cmd, start_new_session=True, close_fds=True,
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL)
 
     # Wait for CDP to come up
     for _ in range(30):
@@ -449,11 +528,7 @@ async def cmd_kill(args: list[str], opts: dict) -> None:
     else:
         names = list(set(PROCESS_NAMES.values()))
     for n in names:
-        subprocess.run(
-            ["powershell.exe", "-NoProfile", "-Command",
-             f"Stop-Process -Name {n} -Force -ErrorAction SilentlyContinue"],
-            check=False, capture_output=True,
-        )
+        _kill_browser(n)
     print(f"Killed: {', '.join(names)}")
 
 
