@@ -1,7 +1,8 @@
 #!/usr/bin/env pwsh
-# cb — Claude Browser CLI wrapper.
-# Forwards all args to cb.py with the local Python interpreter.
-
+# cb - Claude Browser CLI wrapper (PowerShell). Prefers the harness's own .venv.
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-& python (Join-Path $scriptDir "cb.py") @args
+$py = Join-Path $scriptDir ".venv\Scripts\python.exe"
+if (-not (Test-Path $py)) { $py = "python" }
+$env:CB_HOME = $scriptDir
+& $py -c "import os, sys; sys.path.insert(0, os.environ['CB_HOME']); import cb; sys.exit(cb.main())" @args
 exit $LASTEXITCODE

@@ -1,0 +1,27 @@
+# GitHub Actions workflow for the cb test suite. To enable CI, copy this file to
+# .github/workflows/test.yml (pushing workflow files needs a token with the `workflow` scope).
+
+name: test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: pip install playwright pyyaml pytest pyflakes
+      - name: Lint
+        run: python -m pyflakes cb.py tests/*.py
+      - name: Test (uses the runner's preinstalled Google Chrome)
+        run: python -m pytest tests -q
+      - name: Daemon log on failure
+        if: failure()
+        run: cat /tmp/cb-test-*/daemon.log /tmp/cb-test-*/browser.log 2>/dev/null | tail -100 || true

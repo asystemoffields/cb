@@ -1,0 +1,9 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Shadow</title></head><body>
+<h1>Shadow DOM test</h1>
+<my-widget><span slot="label">Slotted label</span></my-widget>
+<script>
+customElements.define('my-widget', class extends HTMLElement { constructor(){ super(); const r=this.attachShadow({mode:'open'});
+ r.innerHTML = '<div><slot name="label"></slot><input placeholder="Shadow input"><button id="sb">Shadow button</button><p id="out"></p></div>';
+ r.getElementById('sb').onclick = () => { r.getElementById('out').textContent = 'shadow clicked ' + r.querySelector('input').value; };
+}});
+</script></body></html>

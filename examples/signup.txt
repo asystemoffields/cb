@@ -1,0 +1,9 @@
+# One cb command per line. Run with:  cb batch examples/signup.txt
+# Targets can be refs from `cb snap`, visible text/labels, or selectors.
+goto https://example.com/signup
+fill "Email address" alex@example.com
+fill Password "correct horse battery staple"
+fill Country Canada
+check "I agree to the terms"
+click "Create account"
+wait --url /welcome

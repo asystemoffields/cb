@@ -1,364 +1,265 @@
 # cb — Claude Browser
 
-A Playwright-over-CDP harness designed for **Claude Code** to drive **any
-Chromium-based browser** (Brave, Chrome, Edge) on **Windows, macOS, and Linux**. Optimized for the
-way an LLM operator works: snap a page → reference elements by number → act,
-with smart fallbacks for selectors and a single-CDP-session batch mode for
-multi-step flows.
+A browser harness built for **LLM agents** (Claude Code first, any shell-driving agent works).
+It drives Chrome, Edge, Brave or Chromium over CDP on **Windows, macOS and Linux**, and is designed
+around how a model actually works: read a compact text view of the page, act on a numbered element,
+read what changed.
 
-## Why this exists
+```
+$ cb goto localhost:8765
+loaded http://localhost:8765/
+Page: CB Test Home
+URL: http://localhost:8765/
+main:
+  # Welcome to the test site
+  form "Sign up":
+    [5] textbox "Email address" type=email (required)
+    [8] checkbox "I agree to the terms" (unchecked)
+    [11] select "Country" = "Choose…" options: Choose… | United States | Canada | Mexico
+    [13] button "Sign up"
 
-LLM operators struggle with browsers because:
+$ cb fill 5 alex@example.com
+filled [5] textbox "Email address" = 'alex@example.com'
 
-- **Selectors are brittle.** "Click the Submit button" is easy to say, hard to
-  encode as CSS. So `cb act "click Submit"` tries six strategies in order
-  (text, role, label, placeholder, fuzzy match against the last snap).
-- **Visual context is hard to pass back.** `cb snap` produces an annotated
-  screenshot with numbered overlay boxes on every interactive element, plus a
-  registry. Subsequent commands accept `#7` as shorthand for "element 7 from
-  the last snap."
-- **One-shot CLIs are slow.** Each CDP attach costs ~300–500ms. The `batch`
-  command runs a YAML/JSON script in one persistent connection.
-- **React lies about its DOM.** Force-clicks, real input/change events, and
-  digit-prefixed-ID fallbacks are baked in.
+$ cb click "Sign up"
+clicked [13] button "Sign up"
+changes (1 added, 0 removed):
++   Submitted: alex@example.com
+```
 
-## Setup
+## Why it's fast and easy for a model
 
-Dependencies: `playwright`, `Pillow`, `PyYAML` (Python 3.10+). Connecting over
-CDP does **not** require Playwright's bundled browsers, so `playwright install`
-is unnecessary — you just need the `playwright` pip package and a real
-Brave/Chrome/Edge install.
+- **Every action reports its own effect.** After a click/fill/press, cb waits for the page to
+  settle (navigation, in-flight XHR/fetch, DOM mutations) and prints only the outline lines that
+  changed — or the full new page after a navigation. Dialogs, new tabs, downloads, console errors
+  and failed API calls are reported inline. No "snap again to see what happened" round trips.
+- **Text-first outline, not screenshots.** `cb snap` renders headings, text and every
+  interactive element as `[ref] role "name" = "value" (states)` with landmarks (`nav:`, `form:`,
+  `dialog (modal):`) for structure. Visually hidden junk is dropped; big pages are trimmed to a
+  token budget (off-screen text first). Screenshots are there when you need eyes (`cb shot -a`).
+- **Stable refs.** An element keeps its number across snapshots and DOM updates until the page
+  navigates, and refs are never reused, so an old ref fails loudly instead of clicking the wrong thing.
+- **Anything is a target.** `12`, `[12]`, `"Sign in"` (visible text / label / placeholder /
+  accessible name), CSS, `xpath=`, `role=button[name="Save"]`, or `340,120` coordinates.
+- **Smart actions.** `fill` detects text fields, `<select>`s, checkboxes, file inputs, custom
+  dropdowns and contenteditable editors. `check` works on hidden-input/label and ARIA switches.
+  `upload` handles hidden file inputs and buttons that open a file chooser.
+- **Shadow DOM and iframes just work.** Open shadow roots are walked; iframes are inlined in the
+  outline and their refs are used like any other.
+- **Persistent daemon.** The first command starts a background daemon that keeps one CDP connection
+  (plus console/network/dialog capture). Commands cost ~60–100 ms instead of ~1–1.5 s.
+- **Batching.** `cb batch` runs many commands in one tool call and prints a single change report.
+- **Actionable errors.** "click blocked: `<div class="cookie-banner">` is covering the element",
+  "element is disabled", "ref [12] is not on the page anymore (it came from …)". Blocked and disabled
+  clicks fail in ~1.5 s instead of sitting out a long timeout.
+- **Safe by default.** cb launches its own browser instance with its own profile, so it never kills
+  or takes over your everyday browser. Logins you make in it persist between sessions.
+- **Parallel agents.** `CB_SESSION=name` gives each agent its own browser, daemon and state.
 
-### Linux / macOS
+Measured on the bundled test site (headless Chromium): filling and submitting a form took **6.3 s
+and 6 tool calls** with cb 1.x; with cb 2 it is **~1.1 s in 4 calls, or ~1.0 s in 1 `batch` call**,
+and a plain `cb snap` is **~0.1 s** (was ~1.4 s).
+
+## Install
+
+Python 3.10+ and the `playwright` package. You do **not** need `playwright install` if Chrome, Edge,
+Brave or Chromium is installed — cb drives the real browser.
 
 ```bash
-# One-time: create an isolated venv for the harness and install deps.
-# (On Debian/Ubuntu you may first need: sudo apt install python3-venv)
-cd /path/to/cb
+git clone https://github.com/asystemoffields/cb && cd cb
 python3 -m venv .venv
-./.venv/bin/pip install playwright Pillow PyYAML
-
-# Then use the bash wrapper (auto-uses .venv if present). Put cb on PATH or
-# call it by full path:
-./cb launch                          # auto-detect Brave > Chrome > Edge
-./cb launch chrome                   # force Chrome
-CB_BROWSER=edge ./cb launch          # via env var
-CB_BROWSER_PATH=/opt/something/chromium ./cb launch
+./.venv/bin/pip install playwright          # optional: pyyaml (YAML batch files)
+./cb status                                 # put the folder on PATH, or call ./cb
 ```
 
-Browser binaries are resolved against `$PATH` (e.g. `brave-browser`,
-`google-chrome`, `chromium`) — or set `CB_BROWSER_PATH` to an absolute path.
-Killing uses `pkill -x` on the exact process name.
+Or install the command globally: `pip install .` (or `pipx install .`) provides `cb`.
 
-### Windows
+Windows: use `cb.bat` (cmd) or `cb.ps1` (PowerShell); both prefer `.venv\Scripts\python.exe`.
 
-Already installed on this machine: Playwright 1.58, Pillow 12, PyYAML 6. Use the
-`cb.bat` / `cb.ps1` wrapper:
+No browser installed? `./.venv/bin/playwright install chromium` and cb will find it.
 
-```powershell
-# From any directory, after putting the cb folder on PATH (or use full path):
-cb launch                           # auto-detect Brave > Chrome > Edge
-cb launch chrome                    # force Chrome
-$env:CB_BROWSER = "edge"; cb launch # via env var
-$env:CB_BROWSER_PATH = "C:\path\to\custom-chromium.exe"; cb launch
-```
+### Use it from Claude Code
 
-`launch` will:
-1. Try to attach to whatever's running on CDP port 9333. If it works, exit.
-2. Otherwise kill any existing instance of the chosen browser (CDP needs the
-   `--remote-debugging-port` flag at startup; you can't add it to a running
-   process), wait, relaunch detached with the flag, wait for CDP to come up.
-
-Sessions persist — your normal Brave/Chrome/Edge profile loads, you stay
-logged into Gmail / GitHub / whatever. The harness rides along.
-
-### Environment overrides
-
-| Var | Default | Purpose |
-|---|---|---|
-| `CB_CDP_PORT` | `9333` | DevTools port |
-| `CB_BROWSER` | (auto) | `brave` / `chrome` / `edge` |
-| `CB_BROWSER_PATH` | (auto) | Full path to a Chromium-based exe |
-| `CB_USER_DATA_DIR` | (browser default) | Custom profile dir |
-| `CB_TIMEOUT_MS` | `8000` | Default per-action timeout |
-| `CB_SHOT_DIR` | `~` (home) | Where snap/screenshot files go |
-| `CB_STATE_DIR` | `~/.cb` | Where state.json lives |
-
-## The killer feature: snap → ref
-
-```powershell
-cb snap                  # → snap-20260506-143012-annotated.png + state.json
-```
-
-Output:
-
-```
-URL:    https://github.com/anthropics
-Title:  Anthropic · GitHub
-Shot:   ~\documents\snap-20260506-143012-annotated.png
-Elements: 47 (use #N to reference)
-
-  #  0 a        link        Skip to content
-  #  1 input    text                  (search input)
-  #  2 button   button      Sign in
-  #  3 a        link        anthropics
-  #  4 a        link        Repositories
-  ...
-```
-
-Now any selector-taking command accepts `#N` or `7`:
-
-```powershell
-cb click 2               # click "Sign in"
-cb fill 1 "claude-code"  # fill the search input
-cb hover #4              # hover Repositories tab
-```
-
-The annotated PNG is what Claude reads to decide what to click. Box colors:
-red = inputs, blue = buttons, green = links, purple = other interactive.
-
-Re-snap after every state change — refs invalidate when the DOM changes.
-
-## Command reference
-
-### Connection
-
-| Command | Purpose |
-|---|---|
-| `cb launch [brave\|chrome\|edge]` | Start browser w/ CDP, or attach if already up |
-| `cb kill [brave\|chrome\|edge]` | Force-quit browser (rare) |
-| `cb connect` / `cb title` | Verify connection: print URL + title of active page |
-
-### Navigation
-
-| Command | Purpose |
-|---|---|
-| `cb goto <url> [--wait load\|domcontentloaded\|networkidle]` | Navigate |
-| `cb back`, `cb forward`, `cb reload` | History |
-
-### Inspection (high-signal)
-
-| Command | Purpose |
-|---|---|
-| `cb snap [--full]` | **Annotated screenshot + element registry. Use this first.** |
-| `cb screenshot [name] [--full]` | Plain screenshot |
-| `cb html [--trim N]` | Page HTML (trimmed; default 15 KB) |
-| `cb text <sel\|#N>` | Text content of element |
-| `cb links [filter]` | All `<a href>` links, optional substring filter |
-| `cb forms` | Visible form controls w/ labels, types, current values |
-| `cb ax [--all]` | Accessibility tree (compact: `interesting_only=True` by default) |
-| `cb eval <js>` | Run arbitrary JS, return result |
-
-### DOM actions
-
-All of these accept either a CSS selector / Playwright anchor or a numeric
-ref from the last snap (`7` or `#7`).
-
-| Command | Purpose |
-|---|---|
-| `cb click <sel\|#N> [--force] [--timeout N]` | Click. Auto-scrolls into view first |
-| `cb dblclick <sel\|#N>` | Double-click |
-| `cb fill <sel\|#N> <value>` | React-safe fill (proper input/change events) |
-| `cb clear <sel\|#N>` | Clear an input |
-| `cb check <sel\|#N>` / `uncheck <sel\|#N>` | Force-toggle (works on MUI/custom checkboxes) |
-| `cb select <sel\|#N> <option>` | Native `<select>`, value or label |
-| `cb upload <sel\|#N> <path>` | File upload to `<input type="file">` |
-| `cb hover <sel\|#N>` / `focus <sel\|#N>` / `blur <sel\|#N>` | Mouse/focus state |
-| `cb press <sel\|#N> <key>` | Press a key on element (e.g. `Enter`, `Control+A`) |
-| `cb keys <combo>` | Press a combo on the page (no element needed) |
-| `cb type <text> [--delay N]` | Type into focused element (per-char delay optional) |
-| `cb scroll <up\|down\|top\|bottom\|sel\|#N> [px]` | Scroll page or element into view |
-| `cb coord_click <x> <y> [--button] [--clicks]` | Bypass DOM (canvas / PDF / OCR fallback) |
-| `cb coord_move <x> <y>` | Move mouse to coords (hover canvas regions) |
-| `cb drag <from> <to>` | Drag-and-drop |
-
-### Smart actions (natural language)
-
-| Command | Purpose |
-|---|---|
-| `cb act "<description>"` | Resolve target by multiple strategies, then act |
-| `cb find "<description>"` | Show what `act` would target (no action) |
-| `cb fill_form <json_or_path>` | Bulk fill: `{label: value}`. Auto-detects checkbox vs select vs file vs text |
-
-`act` understands these verbs (defaulting to "click" if none): click / tap /
-press / open / fill / type / enter / set / check / uncheck / toggle / select /
-choose / pick / upload / attach.
-
-Forms understood:
+Copy the skill so Claude knows the tool exists and how to drive it:
 
 ```bash
-cb act "click Sign In"
-cb act "fill Email with alex@example.com"
-cb act "Email = alex@example.com"
-cb act "check I agree to the terms"
-cb act "select Country with United States"
-cb act "upload Resume with C:\path\resume.pdf"
+mkdir -p ~/.claude/skills && cp -r skills/browser ~/.claude/skills/
 ```
 
-Resolution order:
-1. If the target is a numeric ref (`#7`), use the snap registry.
-2. If the target looks like a CSS selector or has a Playwright anchor prefix
-   (`text=`, `role=`, `css=`, `xpath=`), use it directly.
-3. `get_by_role(...)` for common roles.
-4. `get_by_label`, `get_by_placeholder`, `get_by_text`.
-5. Fuzzy string match against the last snap's element labels.
-6. Fail with a list of close candidates.
+(`skills/browser/SKILL.md` is a one-page guide; `cb help` is the full cheat sheet.)
 
-### Waits (do these BEFORE acting on dynamic content)
+## The loop
 
-| Command | Purpose |
-|---|---|
-| `cb wait <sel\|#N> [timeout_ms]` | Wait for element to be visible |
-| `cb wait_hidden <sel\|#N> [timeout_ms]` | Wait for element to disappear |
-| `cb wait_url <regex_or_substring> [timeout_ms]` | Wait for URL to match |
-| `cb wait_text <text> [timeout_ms]` | Wait for visible text |
-| `cb wait_idle [timeout_ms]` | Wait for network idle |
-| `cb wait_js "<expr>" [timeout_ms]` | Wait for JS expression to be truthy |
-| `cb sleep <ms>` | Last resort. Hard sleep |
-
-### Tabs / frames
-
-| Command | Purpose |
-|---|---|
-| `cb tabs` | List all tabs across all contexts as `[ctx:idx] title / url` |
-| `cb tab <i>` | Switch to tab (`0:1` or just `1` for context 0) |
-| `cb new_tab [url]` | Open a new tab |
-| `cb close_tab [i]` | Close a tab (defaults to current) |
-| `cb frames` | List iframes on current page |
-| `cb frame <sel\|#N>` | Scope subsequent action commands to this iframe |
-| `cb frame_reset` | Back to top frame |
-
-### Sessions / cookies / storage
-
-| Command | Purpose |
-|---|---|
-| `cb cookies [name]` | List cookies (optionally filter by name) |
-| `cb cookies_save <file>` | Save all cookies to JSON |
-| `cb cookies_load <file>` | Restore cookies (preserves login across browser restarts) |
-| `cb storage [key]` | localStorage: dump everything, or read one key |
-
-### Batch scripts
-
-```yaml
-# script.yaml — run with `cb batch script.yaml`
-- goto: https://news.ycombinator.com
-- wait_idle: 5000
-- snap: []
-- click: "text=login"
-- fill: ["input[name='acct']", "myhandle"]
-- fill: ["input[name='pw']", "mypassword"]
-- act: "click login"
-- wait_url: news
-- snap: []
+```bash
+cb goto news.ycombinator.com      # navigate; prints the outline
+cb click "past"                   # act; prints the new page (it navigated)
+cb fill 12 "query" --submit       # prints only what changed
+cb read                           # page text as markdown, when you need to read content
+cb shot -a                        # annotated screenshot when layout matters (path printed)
 ```
 
-Args may be a string (shlex-split), a list (passed positionally), or a dict
-(passed as inline JSON — useful for `fill_form`):
+What an action prints:
 
-```yaml
-- fill_form:
-    First name: Alex
-    Last name: Hill
-    Country: United States
-    I agree: true
+| Situation | Output |
+| --- | --- |
+| Page changed in place | `changes (N added, M removed):` then `+`/`-` outline lines |
+| Navigated | `-> URL` and the new page's outline |
+| Nothing visible changed | `(no visible change)` — a strong hint the action didn't work |
+| Side effects | `dialog (confirm) 'Sure?' -> accepted`, `new tab opened: …`, `downloaded: …`, `console error: …`, `request failed: POST /api/save -> 500` |
+
+`--no-snap` skips the report; `CB_AUTOSNAP=off` disables it globally.
+
+### Outline format
+
+```
+nav "Primary":                      container (nav, main, header, footer, aside, form, dialog, …)
+  - [3] link "Docs"                 list item with an interactive element
+# Pricing                           heading (# = h1, ## = h2 …)
+Plans start at $10.                 text
+[7] textbox "Email" type=email = "a@b.c" placeholder="you@x.com" (required, invalid)
+[9] select "Country" = "Canada" options: Canada | Mexico | …(+190)
+[11] checkbox "Remember me" (checked)
+[12] button "Menu" (collapsed)
+[14] clickable "Settings"           a div/span with a pointer cursor or click handler
+[15] label "Upload resume" (for file)   label standing in for a hidden input
+[20] iframe "Payment":              iframe; its content is indented below it
+dialog "Confirm order" (modal):
+Note: div#overlay covers most of the page and will intercept clicks
 ```
 
-`cb batch <script> --continue` keeps going past failures.
+Options: `-i` interactive only, `-v` viewport only, `--in <target>` one subtree, `--forms` form
+controls only, `--urls` link targets, `--shot` annotated screenshot too, `--max N` / `--all` budget,
+`--diff` changes since the last snapshot.
 
-The whole script runs in a single CDP session, so it's much faster than
-chaining one-shot commands.
+## Commands
+
+`cb help` prints the cheat sheet; `cb help <command>` prints details. `T` = any target.
+
+| Group | Commands |
+| --- | --- |
+| Look | `snap`, `read [T] [--links]`, `find <text>`, `shot [T] [-a] [--full]`, `links [filter]`, `html [T]`, `ax [T]`, `eval <js> [--on T]` |
+| Act | `click T [--double\|--right\|--force\|--js]`, `fill T <value> [--submit]`, `type <text> [--into T]`, `press <key>…`, `select T <option>`, `check T`, `uncheck T`, `upload T <file>…`, `hover T`, `focus T`, `clear T`, `scroll [down\|up\|top\|bottom\|T] [--in T]`, `drag T T`, `fill_form <json>`, `act "<sentence>"` |
+| Navigate | `goto <url>`, `back`, `forward`, `reload` |
+| Wait | `wait T`, `wait 2s`, `wait --text "…"`, `wait --gone T`, `wait --url /path`, `wait --idle`, `wait --js "expr"` |
+| Tabs & frames | `tabs`, `tab <n\|text>`, `tab new [url]`, `tab close [n]`, `frames`, `frame T\|top` |
+| Debug & data | `console [--errors]`, `network [filter] [--failed] [--body ID]`, `dialog accept [text]\|dismiss`, `downloads`, `cookies`, `cookies_save/cookies_load <file>`, `storage [key]`, `viewport W H`, `pdf [file]` |
+| Session | `status`, `launch`, `close`, `kill`, `daemon status\|stop\|restart\|log` |
+| Scripting | `batch <file\|->`, `batch "cmd" "cmd" …`, `help [cmd]` |
+
+Notes:
+
+- `goto` adds the scheme for you: `example.com` → https, `localhost:3000` → http, `./page.html` → file.
+- `press` keys: `Enter`, `Tab`, `Escape`, `ArrowDown`, `Control+A`, `Mod+A` (Ctrl, or Cmd on macOS),
+  sequences (`cb press Tab Tab Enter`), or on a target (`cb press 7 Enter`).
+- Coordinates are viewport CSS pixels — exactly the pixels of a `cb shot` image.
+- Dialogs are auto-accepted and reported. Run `cb dialog dismiss` (or `accept "text"` for prompts)
+  *before* the action that opens one.
+- `network --body ID` prints a captured XHR/fetch response — handy for scraping JSON APIs.
+
+## Batch
+
+One command per line (a leading `cb` is optional; `#` comments):
+
+```bash
+cb batch <<'EOF'
+goto example.com/login
+fill Email alex@example.com
+fill Password hunter2
+click "Sign in"
+EOF
+```
+
+or inline: `cb batch "fill 4 alex" "fill 5 secret" "click 6"`. Each step prints one line; the
+final page state is reported once. Stops at the first error (`--continue` to keep going). The 1.x
+YAML/JSON format (`- goto: url`, `- fill_form: {…}`) still works.
+
+## Browser, profile and sessions
+
+- Any command auto-launches a browser if none is listening (`CB_AUTO_LAUNCH=0` to disable).
+  Preference: Brave → Chrome → Edge → Chromium (including Playwright's download); override with
+  `cb launch chrome`, `CB_BROWSER=edge`, or `CB_BROWSER_PATH=/path/to/browser`.
+- cb uses its own profile (`~/.cb/profiles/<browser>`), so it runs alongside your normal browser.
+  Log in once in the cb window and the session sticks. `cb launch --profile DIR` picks another
+  profile. `--profile default` (your everyday profile) requires that browser to be fully closed, and
+  Chrome 136+ refuses remote debugging on the default profile altogether.
+- Headless by default on Linux without a display; headed elsewhere (`--headless` / `--headed`,
+  `CB_HEADLESS=1/0`).
+- An already-running browser with `--remote-debugging-port=9333` is attached to as-is.
+- `CB_SESSION=agent2 cb …` (or `cb --session agent2 …`) runs a fully separate browser, profile,
+  daemon and state — use one per parallel agent.
+
+### Environment
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `CB_SESSION` | `default` | Isolated browser + state per name |
+| `CB_CDP_PORT` | `9333` (default session) | DevTools port |
+| `CB_BROWSER` / `CB_BROWSER_PATH` | auto | Which browser to launch |
+| `CB_BROWSER_ARGS` | | Extra browser flags for launches (also `cb launch -- <flags>`) |
+| `CB_HEADLESS` | auto | `1` headless, `0` headed |
+| `CB_USER_DATA_DIR` | `~/.cb/profiles/<browser>` | Profile directory |
+| `CB_TIMEOUT_MS` | `5000` | Per-action timeout |
+| `CB_SETTLE_MS` | `3000` | Max wait for the page to settle after an action (`0` = don't wait) |
+| `CB_SNAP_MAX` | `12000` | Outline budget in characters |
+| `CB_AUTOSNAP` | `diff` | `off` to stop printing changes after actions |
+| `CB_DIALOG` | `accept` | Default answer to alert/confirm/prompt |
+| `CB_DAEMON` | `1` | `0` runs every command in-process (slower; no console/network history) |
+| `CB_DAEMON_IDLE` | `3600` | Daemon exits after this many idle seconds |
+| `CB_STATE_DIR` | `~/.cb` | State, profiles, screenshots, downloads, logs |
+| `CB_SHOT_DIR` / `CB_DOWNLOAD_DIR` | under `CB_STATE_DIR` | Where screenshots / downloads go |
+| `CB_TAB_URL` | | Prefer the tab whose URL contains this |
+| `CB_DEBUG` | | Print tracebacks for unexpected errors |
 
 ## Recipes
 
-### Log into something for the first time, save the session
+**A click "did nothing".** The output says `(no visible change)`. Check `cb snap` for a
+`Note: … covers most of the page` line or a `(disabled)` state, `cb console --errors`, and
+`cb network --failed`. `cb shot -a` shows the layout. `--force` skips actionability checks;
+`--js` dispatches `element.click()` directly.
 
-```powershell
-cb launch
-cb goto https://app.example.com/login
-# ... do whatever interactive auth (CAPTCHA, 2FA) the user needs to do ...
-cb cookies_save ~\.cb\example-session.json
+**Content that loads later.** Actions already wait for network and DOM to settle. For slower
+things: `cb wait "Order confirmed"`, `cb wait --gone "Loading"`, `cb wait --url /done`.
+
+**Huge pages.** `cb find "invoice"` lists matching elements with refs; `cb snap --in 40` outlines one
+region; `cb snap -v` shows only the viewport; `cb read` gets the text.
+
+**Infinite scroll.** `cb scroll bottom` — the new items appear in the change report.
+
+**Scraping an API-backed page.** `cb network api` lists XHR/fetch calls; `cb network --body 17`
+prints a JSON response.
+
+**Canvas / maps / PDFs.** `cb shot` and click by pixel: `cb click 412,230`.
+
+**Keep a login across machines.** `cb cookies_save ~/site.json`, then `cb cookies_load ~/site.json`.
+
+## Upgrading from 1.x
+
+- `cb launch` no longer kills your running browser; it starts a separate instance with its own
+  profile (log in once). `cb kill brave` only kills the cb-launched browser; add `--all` for the
+  old kill-everything behavior.
+- `snap` prints a text outline (the annotated screenshot is `snap --shot` or `shot -a`). Refs are
+  now stable numbers that never repeat; `#7` / `7` still work.
+- Screenshots go to `~/.cb/shots` instead of your home folder.
+- `act`, `find`, `fill_form`, `batch` (YAML/JSON), `wait_*`, `coord_click`, `keys`, `dblclick`,
+  `new_tab`, `close_tab`, `frame_reset`, `connect`/`title` all still work.
+- Fixed: `--flag value` options (e.g. `goto --wait load`) were silently ignored or crashed; `ax`
+  broke on Playwright ≥ 1.57; refs could resolve to the wrong element (`nth-of-type` selectors);
+  `tab N` didn't stick; `act "select … with …"` clicked instead of selecting.
+
+## Development
+
+```bash
+./.venv/bin/pip install playwright pyyaml pytest
+./.venv/bin/python -m pytest tests -q        # ~40 end-to-end tests against headless Chromium
 ```
 
-Next session:
+`tests/site/` is the fixture site and `tests/server.py` serves it (`python tests/server.py 8765`).
+See `CLAUDE.md` for the architecture. A GitHub Actions workflow is in
+`contrib/github-actions-test.yml` (copy it to `.github/workflows/` to enable CI).
 
-```powershell
-cb launch
-cb cookies_load ~\.cb\example-session.json
-cb goto https://app.example.com/dashboard
-```
+## Limitations
 
-### Debug a click that "did nothing"
-
-1. `cb snap` — annotated screenshot makes the actual layout obvious
-2. `cb find "Submit"` — see what `act` would target and other candidates
-3. `cb eval "document.activeElement.outerHTML"` — what's focused?
-4. `cb eval "Array.from(document.querySelectorAll('[disabled]')).map(e => e.outerHTML)"` — anything disabled blocking?
-5. `cb click 7 --force` — bypass actionability checks (overlays, animations)
-
-### Workflows that span multiple pages
-
-Always re-snap between pages. The numbered refs are cleared on every snap;
-they refer to the page that was current when the snap was taken, not
-forever-after. After `goto` or after clicking something that loaded a new
-view, run `cb wait_idle` then `cb snap` again.
-
-### Canvas / PDF / weird non-DOM targets
-
-`cb coord_click x y` bypasses the DOM entirely. Get coords from a screenshot
-+ ruler in your head, or from `cb eval` with a `getBoundingClientRect()` on
-something nearby. Multi-monitor scaling can be off — verify with a screenshot.
-
-### iframe content
-
-```powershell
-cb snap                       # find the iframe in the registry, e.g. #12
-cb frame 12                   # subsequent commands scope to it
-cb snap                       # registry now shows iframe contents
-cb act "click Confirm"
-cb frame_reset                # back to top
-```
-
-## Selector cheatsheet
-
-| Form | Example | When to use |
-|---|---|---|
-| Numeric ref | `#7`, `7` | Right after `cb snap` |
-| CSS | `button.submit`, `input[name="email"]`, `[data-testid="x"]` | Stable structural selectors |
-| Text anchor | `text=Submit Application` | Click by visible text (Playwright extension) |
-| Role | `role=button[name="Save"]` | Accessibility-first, robust to redesign |
-| Aria | `[aria-label="Close"]` | Common on icon buttons |
-| ID with digit prefix | `#abc123` works; `#1abc` auto-rewrites to `[id="1abc"]` | React-generated UUIDs |
-| XPath | `xpath=//div[@class="..."]` | Last resort |
-
-## Output conventions
-
-- Single-shot commands print plain text or JSON to stdout. Errors go to stderr
-  with `ERROR: …` and a non-zero exit.
-- `snap` prints a compact summary (≤60 elements) and writes the full registry
-  to `state.json`. Read `state.json` if you need to inspect anything beyond
-  the summary.
-- `forms`, `eval`, `cookies`, `ax`, `storage` print JSON.
-
-## Limitations / not-shipped (yet)
-
-- **No daemon mode.** Each command opens a fresh CDP attach (~300–500ms).
-  `cb batch` is the workaround for chained workflows. A persistent server
-  process would be next iteration.
-- **No XHR/console capture.** Listeners are short-lived because each command
-  reconnects. Will need the daemon for real network/console history.
-- **No record-and-replay.** Manual scripting only.
-- **No CAPTCHA solving / anti-bot evasion.** Out of scope. Stop and let the
-  human handle it in the live browser.
-
-## Files
-
-```
-cb/
-├── cb.py                       # everything; single-file harness
-├── cb.bat                      # Windows wrapper: `cb <args>`
-├── cb.ps1                      # PowerShell wrapper
-├── README.md                   # this
-└── examples/
-    ├── example_form.json       # minimal JSON batch
-    └── login_flow.yaml         # YAML with fill_form
-```
+- Chromium-family browsers only (CDP). No Firefox/Safari.
+- Closed shadow roots and cross-origin iframes nested more than 4 deep aren't outlined.
+- No CAPTCHA solving or bot-detection evasion. When a site challenges you, hand the window to the
+  human (`cb launch --headed`).

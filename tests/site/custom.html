@@ -1,0 +1,17 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Custom widgets</title>
+<style>.opt{padding:4px;cursor:pointer} #menu{display:none;border:1px solid #999} #menu.open{display:block} .hiddeninput{display:none}
+.toggle{display:inline-block;width:40px;height:20px;background:#ccc;cursor:pointer}</style></head><body>
+<h1>Custom</h1>
+<div id="combo" role="combobox" aria-expanded="false" aria-label="Fruit" tabindex="0" onclick="document.getElementById('menu').classList.toggle('open'); this.setAttribute('aria-expanded', document.getElementById('menu').classList.contains('open'))">Pick a fruit</div>
+<div id="menu" role="listbox"><div class="opt" role="option" onclick="pick('Apple')">Apple</div><div class="opt" role="option" onclick="pick('Banana')">Banana</div></div>
+<input type="checkbox" id="hc" class="hiddeninput"><label for="hc">Subscribe to newsletter</label>
+<input type="file" id="fileinput" class="hiddeninput" onchange="document.getElementById('fr').textContent='file: '+this.files[0].name"><label for="fileinput" style="border:1px solid">Upload resume</label>
+<p id="fr"></p>
+<div role="switch" aria-checked="false" aria-label="Dark mode" class="toggle" tabindex="0" onclick="this.setAttribute('aria-checked', this.getAttribute('aria-checked')!=='true')"></div>
+<div id="modal-open"><button onclick="document.getElementById('dlg').showModal()">Open dialog</button></div>
+<dialog id="dlg"><h2>Confirm order</h2><p>Are you sure?</p><button onclick="document.getElementById('dlg').close(); document.getElementById('fr').textContent='confirmed'">Confirm</button><button onclick="document.getElementById('dlg').close()">Cancel</button></dialog>
+<div id="overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.4)"></div>
+<button onclick="document.getElementById('overlay').style.display='block'">Show overlay</button>
+<div contenteditable="true" aria-label="Editor" style="border:1px solid;min-height:20px"></div>
+<script>function pick(v){document.getElementById('combo').textContent=v; document.getElementById('menu').classList.remove('open');}</script>
+</body></html>

@@ -1,0 +1,40 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>CB Test Home</title>
+<style>.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)} .card{cursor:pointer;border:1px solid #ccc;padding:4px;margin:4px;width:200px}</style>
+</head><body>
+<header><nav aria-label="Primary"><ul><li><a href="/index.html">Home</a></li><li><a href="/page2.html">Page two</a></li><li><a href="/page2.html" target="_blank">Open in new tab</a></li></ul></nav></header>
+<main>
+<h1>Welcome to the test site</h1>
+<p>Read the <a href="/docs.html">documentation</a> for more details about this site.</p>
+<a class="sr-only" href="#main">Skip to content</a>
+<form id="signup" aria-label="Sign up" onsubmit="event.preventDefault(); document.getElementById('result').textContent = 'Submitted: ' + new FormData(this).get('email') + ' / ' + new FormData(this).get('country') + ' / agree=' + (this.agree.checked);">
+  <label for="email">Email address</label> <input id="email" name="email" type="email" required>
+  <label>Password <input name="password" type="password"></label>
+  <input name="q" placeholder="Search anything">
+  <label><input type="checkbox" name="agree"> I agree to the terms</label>
+  <fieldset><legend>Plan</legend>
+    <label><input type="radio" name="plan" value="free" checked> Free</label>
+    <label><input type="radio" name="plan" value="pro"> Pro</label>
+  </fieldset>
+  <label for="country">Country</label>
+  <select id="country" name="country"><option value="">Choose…</option><option value="us">United States</option><option value="ca">Canada</option><option value="mx">Mexico</option></select>
+  <textarea name="bio" aria-label="Bio"></textarea>
+  <button type="submit">Sign up</button>
+</form>
+<p id="result"></p>
+<div class="card" onclick="this.textContent='Card clicked!'"><span>Fancy card</span></div>
+<div role="button" tabindex="0" id="divbtn" onclick="document.getElementById('result').textContent='div button pressed'">Div button</div>
+<button id="add" onclick="const li=document.createElement('li'); li.textContent='Item '+(document.querySelectorAll('#list li').length+1); document.getElementById('list').appendChild(li)">Add item</button>
+<ul id="list"><li>Item 1</li></ul>
+<button id="confirm" onclick="document.getElementById('result').textContent = confirm('Really delete?') ? 'deleted' : 'kept'">Delete everything</button>
+<button id="prompt" onclick="document.getElementById('result').textContent = 'name=' + prompt('Your name?', 'anon')">Ask name</button>
+<button id="slow" onclick="setTimeout(()=>{const d=document.createElement('div'); d.id='late'; d.textContent='Loaded late'; document.body.appendChild(d)}, 700)">Load slowly</button>
+<button id="fetch" onclick="fetch('/api/items').then(r=>r.json()).then(j=>{document.getElementById('result').textContent='Got '+j.items.join(', ')})">Fetch items</button>
+<button id="hide" onclick="this.parentNode.querySelector('#gone').remove()">Remove banner</button>
+<div id="gone">Temporary banner</div>
+<button disabled>Disabled action</button>
+<table><caption>Prices</caption><tr><th>Plan</th><th>Price</th></tr><tr><td>Free</td><td>$0</td></tr><tr><td>Pro</td><td>$10 <a href="#buy">Buy</a></td></tr></table>
+<img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" alt="Company logo" width="40" height="40">
+</main>
+<footer><p>© 2026 Test</p></footer>
+</body></html>

@@ -1,0 +1,3 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Infinite</title></head><body><h1>Feed</h1><div id="feed"></div>
+<script>let n=0; function more(){for(let i=0;i<20;i++){const p=document.createElement('p'); p.textContent='Post '+(++n); p.style.height='60px'; document.getElementById('feed').appendChild(p)}}
+more(); window.addEventListener('scroll',()=>{if(innerHeight+scrollY>=document.body.scrollHeight-50 && n<60) more()});</script></body></html>

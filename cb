@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # cb — Claude Browser CLI wrapper (Linux/macOS).
-# Forwards all args to cb.py. Prefers the harness's own .venv if present,
-# otherwise falls back to system python3/python.
+# Imports cb.py as a module (so Python's bytecode cache applies) with the
+# harness's own .venv if present, otherwise system python3.
 set -euo pipefail
-here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+here="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")")" && pwd)"
 py="$here/.venv/bin/python"
 if [ ! -x "$py" ]; then
     py="$(command -v python3 || command -v python || true)"
@@ -12,4 +12,4 @@ if [ -z "${py:-}" ]; then
     echo "cb: no python interpreter found (install python3, or create $here/.venv)" >&2
     exit 1
 fi
-exec "$py" "$here/cb.py" "$@"
+CB_HOME="$here" exec "$py" -c 'import os, sys; sys.path.insert(0, os.environ["CB_HOME"]); import cb; sys.exit(cb.main())' "$@"
